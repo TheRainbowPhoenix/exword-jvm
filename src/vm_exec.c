@@ -294,9 +294,11 @@ static int step(frame_t *f)
     case 0x01: if(push(f, 0)) return -1; break;
     case 0x02: case 0x03: case 0x04: case 0x05: case 0x06:
     case 0x07: case 0x08:
-        if(push(f, op - 3)) return -1; break;
+        if(push(f, op - 3)) return -1;
+        break;
     case 0x09: case 0x0a:
-        if(push64(f, op - 9)) return -1; break;
+        if(push64(f, op - 9)) return -1;
+        break;
     case 0x0b: case 0x0c: case 0x0d: {
         float x = (float)(op - 0x0b);
         memcpy(&v, &x, 4);
@@ -400,7 +402,8 @@ static int step(frame_t *f)
         case 0x80: v = a | b; break;
         default: v = a ^ b; break;
         }
-        if(push(f, v)) return -1; break;
+        if(push(f, v)) return -1;
+        break;
     }
     case 0x61: case 0x65: case 0x69:
     case 0x7f: case 0x81: case 0x83: {
