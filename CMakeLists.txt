@@ -13,7 +13,12 @@ add_executable(btuproof
   src/main.c
   src/btu.c
   src/btu_entry.S
-  src/probes.c)
+  src/probes.c
+  src/loader.c
+  src/classfile.c
+  src/vm.c
+  src/vm_exec.c
+  src/vm_native.c)
 target_compile_features(btuproof PRIVATE c_std_11)
 target_compile_options(btuproof PRIVATE
   -Wall -Wextra -Os -flto=auto -fno-pic -fno-pie
@@ -22,7 +27,7 @@ target_link_options(btuproof PRIVATE
   -flto=auto -nostdlib -no-pie -Wl,--build-id=none
   -Wl,--no-warn-rwx-segments -Wl,-Map=btuproof.map
   -Wl,--print-memory-usage)
-target_link_libraries(btuproof Gint::Gint)
+target_link_libraries(btuproof Gint::Gint m)
 
 generate_d01(TARGET btuproof
   OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/btuproof.d01"
