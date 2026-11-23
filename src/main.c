@@ -201,9 +201,10 @@ int main(void)
         jvm_loader_t *loader = &class_index;
         int count = jvm_loader_autodetect(loader);
         if(count <= 0) {
-            title("No Java class files found");
+            title(count < 0 ? "Class scan error" : "No Java class files found");
             dtext(12, 76, C_RED, loader->status);
-            dtext(12, 103, C_BLACK, "Copy .cls files into BTPRF directory");
+            if(count == 0)
+                dtext(12, 103, C_BLACK, "Copy .cls files into BTPRF directory");
             dtext(12, 291, C_BLACK, "EXIT to return");
             dupdate();
             while(key() != KEY_EXIT) {}
