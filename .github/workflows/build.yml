@@ -18,8 +18,39 @@ jobs:
           cc -std=c11 -O2 -Wall -Wextra -Werror -Isrc \
             tests/host_probes.c src/probes.c -o /tmp/host-probes
           /tmp/host-probes
+      - name: Compile and execute a real Java 8 classfile on host
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/classes
+          javac --release 8 -d /tmp/classes tests/java/BtuSmoke.java tests/java/BtuObjects.java
+          python3 tools/pack_classes.py /tmp/class-alias /tmp/classes --main BtuSmoke
+          cc -std=c11 -O2 -Wall -Wextra -Werror -DJVM_HOST -Isrc \
+            tests/host_vm.c src/loader.c src/classfile.c src/vm.c \
+            src/vm_exec.c src/vm_native.c -lm -o /tmp/hostvm
+          cc -std=c11 -O2 -Wall -Wextra -Werror -DJVM_HOST -Isrc \
+            tests/host_loader.c src/loader.c -o /tmp/hostloader
+          /tmp/hostloader /tmp/class-alias
+          /tmp/hostvm /tmp/class-alias BtuSmoke > /tmp/smoke.out
+          diff -u tests/expected/BtuSmoke.txt /tmp/smoke.out
+          /tmp/hostvm /tmp/class-alias BtuObjects > /tmp/objects.out
+          diff -u tests/expected/BtuObjects.txt /tmp/objects.out
+          # Exercise the aliases without changing Java class-file bytes.
+          mkdir /tmp/alias-cla /tmp/alias-class
+          cp /tmp/class-alias/BTUSMOKE.cls /tmp/alias-cla/BTUSMOKE.cla
+          cp /tmp/classes/BtuObjects.class /tmp/alias-class/BtuObjects.class
+          /tmp/hostvm /tmp/alias-cla BtuSmoke > /tmp/cla.out
+          diff -u tests/expected/BtuSmoke.txt /tmp/cla.out
+          /tmp/hostvm /tmp/alias-class BtuObjects > /tmp/class.out
+          diff -u tests/expected/BtuObjects.txt /tmp/class.out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: smoke-java-classes
+          path: /tmp/class-alias/
+          if-no-files-found: error
 
   build:
+    needs: host
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/therainbowphoenix/gint-docker:main
@@ -55,6 +86,10 @@ jobs:
           cmake --build /tmp/gint-build --parallel 2
           cmake --install /tmp/gint-build
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: smoke-java-classes
+          path: smoke-java-classes
       - name: Build BTU proof and installation packages
         shell: bash
         run: |
@@ -67,6 +102,9 @@ jobs:
             '-DCMAKE_MODULE_PATH=/tmp/gint-exword/lib/cmake/fxsdk;/tmp/fxsdk-exword/lib/cmake/fxsdk' \
             -DEXWORD_METADATA_SOURCE=/tmp/exword-metadata
           cmake --build build-exword --parallel 2
+          for locale in ja cn; do
+            cp -av smoke-java-classes/. "build-exword/packages/$locale/BTPRF/"
+          done
           test -s build-exword/btuproof.d01
           test "$(stat -c %s build-exword/btuproof.d01)" -le 131072
           for locale in ja cn; do
@@ -79,14 +117,14 @@ jobs:
       - name: Upload Japanese install folder
         uses: actions/upload-artifact@v4
         with:
-          name: exword-btu-proof-ja
+          name: exword-jvm-ja
           path: build-exword/packages/ja/
           if-no-files-found: error
 
       - name: Upload Chinese install folder
         uses: actions/upload-artifact@v4
         with:
-          name: exword-btu-proof-cn
+          name: exword-jvm-cn
           path: build-exword/packages/cn/
           if-no-files-found: error
 
@@ -94,7 +132,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: exword-btu-proof-debug
+          name: exword-jvm-debug
           path: |
             build-exword/btuproof
             build-exword/btuproof.map

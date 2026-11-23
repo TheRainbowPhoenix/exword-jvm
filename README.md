@@ -1,81 +1,184 @@
-# EXWord SH7305 BTU hardware proof (C + SH assembly)
+# EXWord JVM — SH7305 BTU + C Java 8 class-file runtime
 
-This is a small **real-hardware Java bytecode probe** for Casio EXWord,
-built from the gint EXWord template. It ports the SH7305 BTU handoff from
-[cpjvm-rs](https://github.com/TheRainbowPhoenix/cpjvm-rs) and the big-endian
-SH7305 register model in [RuK](https://github.com/TheRainbowPhoenix/RuK/blob/sh4cc/ruk/jcore/btu.py).
-It does **not** use RuK's SH3-DSP variant.
+A small Java bytecode interpreter, with hardware acceleration using the **real
+SH7305 Bytecode Translation Unit** on an EXWord electronic dictionary.
+The implementation is **C + SH4 assembly**, using the EXWord fxSDK and gint.
+No Rust cross-compiler or Java runtime on the EXWord is required.
 
-The EXWord app uses C plus an SH assembly trampoline, with no Rust compiler.
-The D01 add-in ID is **BTPRF**, distinct from the original GINTT exit-test app.
+The hardware driver and J_JP instruction entry are ported from
+[cpjvm-rs](https://github.com/TheRainbowPhoenix/cpjvm-rs), informed by the
+[RuK SH7305 BTU model](https://github.com/TheRainbowPhoenix/RuK/blob/sh4cc/ruk/jcore/btu.py).
 
-**Status: hardware behavior on EXWord is NOT verified until tested on a device.**
-Successful host compilation or simulated probes alone are not proof of a BTU.
+## Current status — important
 
-## What the eight hardware checks do
+- **Hardware BTU probes:** 8/8 **confirmed on an EXWord by the device owner**
+  (earlier standalone C/ASM probe). The 8 probes are still available via H/F1.
+- **Java class files:** bytecode constant pools, fields, Java method Code and
+  exception tables are parsed; classes are located from their internal JVM
+  name, not their upload filename.
+- **Native C VM:** basic objects, arrays, static/instance fields, method calls,
+  String/StringBuilder, System.out/err printing, control flow, integer and
+  long bytecodes are implemented. Hardware-safe bytecodes run through J_JP;
+  opcodes involving virtual object handles fall back to the C interpreter.
+- **Automated acceptance:** two freshly compiled public Java 8 smoke programs,
+  BtuSmoke.java and BtuObjects.java, run on the **host C VM** and matches Java stdout byte-for-byte.
+  The EXWord .d01 build and JA/CN packaging also succeed in CI.
+- **NOT YET supported fully:** the ten complete cpjvm-rs Java tests. The C
+  library is not as complete as the original Rust implementation: exception
+  handling, GC, and many Java library/float operations still require work.
+  Running an unsupported method produces an explicit failure.
+- **EXWord class execution itself is not yet device-validated.** The known
+  8/8 success only established the earlier BTU hardware proof.
 
-Each check feeds **real Java bytecodes** to SH7305 BTU MMIO, enters via the
-J_JP @R1 opcode (0x413B), and verifies that the trap/event handler reports
-the correct exit type, Java PC, operand stack pointer and results.
+## EXWord memory-limit fix
 
-| Check | Outcome |
-|---|---|
-| J_JP entry | Exact nop/iconst_1/breakpoint hardware self-test from cpjvm-rs -> 1 |
-| Hello 6x7 | bipush 6; bipush 7; imul -> 42 (as in Hello.java) |
-| locals | istore_0; iload_0; imul -> 35 |
-| branch loop | iinc, backwards if_icmplt -> 45 |
-| bit ops | iand and ishl -> 30 |
-| 64bit add | lconst_1; lconst_1; ladd -> 2 (big-endian word layout) |
-| div/zero | idiv by zero -> event R0=4, stack intact |
-| SW handoff | ireturn -> software trap, stack intact |
+This EXWord target has 18.5 KiB for application static data and its
+managed heap (plus a separate stack), compared with much larger host-machine
+heaps. The original launcher attempted to `calloc()` a ~58 KiB class index,
+then `malloc()` a 96 KiB buffer for **every** file. The hardware could not
+possibly satisfy those requests, so the launcher displayed "Not enough
+memory for class index".
 
-The driver uses a 200,000-bytecode countdown, masks interrupts during bytecode
-execution, then restores CPU registers and the BTU clock/control state.
+The index now stores only filenames with a shared directory and individually
+allocated JVM class names. The fixed index and VM tables are reserved in
+the linker's static RAM section, sized to fit its hard limit; class file
+reads allocate exactly their file size. The directory scanner no longer
+allocates an auxiliary constant-pool table. CI tests 30 successive directory
+scans and a real EXWord SH cross-build; the linker enforces the RAM limit.
 
-## Device safety
+**Temporary constraints:** at most **64 class files** in the selected folder,
+**256 object handles** per VM invocation (and no GC yet). These limits cover
+the original uploaded collection of 35 Java classes plus the 2 smoke-test
+classes, but are not enough for the original full cpjvm-rs GC benchmark.
+Real device validation is still needed.
 
-The app does not touch BTU MMIO until you press **EXE**. Press **EXIT** to
-leave without testing. It accesses 0xFF280000 (BTU) and 0xA4150038 (MSTPCR2),
-and changes SR during the SH assembly trampoline. **Only run on a device
-confirmed to have the SH7305-compatible memory map and privilege mode.**
-If these addresses are unmapped, the first access could crash or freeze
-instead of returning a clean failure. A register mismatch causes a failure
-screen; a J_JP fallthrough fails the actual tests.
+## Installing the Java VM
 
-## Build and run
+Download a successful build artifact from
+[GitHub Actions](https://github.com/TheRainbowPhoenix/exword-jvm/actions):
+**exword-jvm-ja** or **exword-jvm-cn**. It contains the BTPRF add-in folder,
+metadata, the D01, and two Java smoke-test classes.
 
-The existing [GitHub Actions workflow](.github/workflows/build.yml) builds the
-EXWord fxSDK, gint-exword and this C project. Download the artifacts
-**exword-btu-proof-ja** or **exword-btu-proof-cn** from a successful run.
-Install the **BTPRF** package for your locale, launch it and press EXE.
+On the EXWord:
 
-For local builds, configure CMake with the EXWORD.cmake toolchain, the gint
-install prefix and EXWORD_METADATA_SOURCE pointing to
-[exword-xd-a8500-TEST](https://github.com/TheRainbowPhoenix/exword-xd-a8500-TEST).
-The output is build-exword/btuproof.d01.
+1. Install the **BTPRF** folder, separately from the previous GINTT test.
+2. Start the app. **EXE** scans for class files and opens the Java launcher.
+3. Use **UP/DOWN** to choose a class with `main(String[])`, then **EXE** to run.
+   The launcher starts with the class named in `main.txt`, if present.
+4. **H** or **F1** runs the original eight hardware BTU probes.
+5. **EXIT** returns to the selector/EXWord.
 
-Host-only sanity check, which intentionally uses a small software model and
-**does not count as hardware proof**:
+The class search tries these native EXWord directories (first one with
+loadable class files wins): `\\drv0\\BTPRF`, `\\crd0\\BTPRF`,
+`\\drv0\\Java`, `\\drv0\\JAVA`, `\\drv0`, `\\crd0`.
+If the dictionary installer puts the D01 under a different folder, put the
+class files in one of these directories. This is preliminary EXWord
+filesystem integration; device validation of the actual installation path
+is still needed.
 
-    cc -std=c11 -O2 -Wall -Wextra -Werror -Isrc \
-      tests/host_probes.c src/probes.c -o /tmp/host-probes
-    /tmp/host-probes
+## Compile your own Java programs
 
-## How this relates to the exact cpjvm-rs Java tests
+Write an ordinary Java 8 program, for example:
 
-The upstream test suite comprises **Hello, Arith, Objects, Exceptions,
-ArraysTest, Strings, Enums, Micro, Bench, Gc**. It executes Java class files
-and compares stdout with the official expected text, not just individual
-bytecodes.
+```java
+public class MyProgram {
+    public static void main(String[] args) {
+        int n = 0;
+        for (int i = 1; i <= 10; ++i) n += i;
+        System.out.println("1..10 = " + n);
+    }
+}
+```
 
-**This proof does not yet run those ten full Java programs.** It validates
-the same hardware self-test and bytecode building blocks. A complete C/C++
-JVM running the original class files requires porting the class-file parser,
-VM/frame interpreter, heap/GC, software bytecode fallback and built-in Java
-library from cpjvm-rs. The hardware driver here is the first reusable piece.
-Nothing is printed as a fake Java suite result.
+On your PC (JDK required):
 
-Code layout: src/btu.[ch] performs MMIO initialization and cleanup;
-src/btu_entry.S is the hardware J_JP trampoline; src/probes.c contains the
-device bytecode fixtures; tests/host_probes.c checks fixture expectations
-without needing EXWord hardware.
+```sh
+mkdir -p /tmp/my-classes
+javac --release 8 -d /tmp/my-classes MyProgram.java
+python3 tools/pack_classes.py /path/to/BTPRF /tmp/my-classes --main MyProgram
+```
+
+Upload the resulting `*.cls` and `main.txt` files **alongside the D01**,
+within the BTPRF folder on the device (or one of the search locations above).
+
+The JVM accepts **`.cls`, `.cla`, and `.class`** extensions, case-insensitively.
+The tool uses `.cls` by default to work with strict 8.3 uploaders. If a
+class name is longer than eight bytes, its short filename is generated
+deterministically from its JVM class name. The compiled bytes are not
+rewritten. The native scanner parses `this_class` in each classfile to recover
+the **actual fully qualified Java class name**, including package and nested
+class names. The optional `classes.txt` manifest maps aliases for people,
+but the VM does not require it. The packer also resolves collisions where
+two packages contain classes with the same short basename.
+
+Java 8 (`--release 8`) is important: modern Java string concatenation uses
+`invokedynamic`, which this early JVM does not yet support.
+
+## Run the ORIGINAL cpjvm-rs suite (local)
+
+With both repositories checked out on your PC:
+
+```sh
+bash tools/check_upstream_suite.sh /path/to/cpjvm-rs /path/to/BTPRF
+```
+
+This script compiles the original `cpjvm-rs/tests/java/*.java` along with
+`tests/suite/Main.java`, packs all class files under 8.3 aliases into the
+given BTPRF folder, then runs these exact programs on the **host C VM**:
+
+```text
+Hello Arith Objects Exceptions ArraysTest Strings Enums Micro Bench Gc
+```
+
+For each program it compares stdout to its original upstream
+`tests/expected/<Name>.txt` byte for byte. It prints individual failures
+and exits unsuccessfully unless **all ten** match. It will currently expose
+incomplete JVM coverage; it is an acceptance test, not a claim of 10/10.
+
+After preparing the folder, transfer the generated `*.cls` files alongside
+the D01 to try the same class files on EXWord. In the launcher choose **Main**
+for the combined suite or run individual tests by selecting their mains.
+
+The upstream `cpjvm-rs` repository is private, so public GitHub Actions
+intentionally does **not** fetch or publish its code or test files. The local
+script uses your own checkout.
+
+## Build
+
+The GitHub Actions workflow builds the EXWord fxSDK, gint-exword, and the C
+project, then packages the D01 and both BtuSmoke/BtuObjects class files for JA/CN EXWord locales.
+
+Local build:
+
+```sh
+cmake -S . -B build-exword \
+    -DCMAKE_TOOLCHAIN_FILE=/path/to/fxsdk/lib/cmake/fxsdk/EXWORD.cmake \
+    -DCMAKE_PREFIX_PATH=/path/to/gint-exword-install \
+    -DEXWORD_METADATA_SOURCE=/path/to/exword-xd-a8500-TEST
+cmake --build build-exword --parallel
+```
+
+The output is `build-exword/btuproof.d01` (D01 module `btup`, app ID BTPRF).
+
+## Runtime layout
+
+- `src/btu.[ch]`, `src/btu_entry.S`: the real SH7305 MMIO driver and
+  `J_JP @R1` trampoline, including software trap/event handoff.
+- `src/loader.[ch]`: EXWord OS filesystem through `gint_world_switch`
+  and classfile discovery by `this_class`.
+- `src/classfile.[ch]`: Java class-file metadata and constant pool parser.
+- `src/vm.c`: class loading/linking, method tables, object handles.
+- `src/vm_exec.c`: Java bytecode execution and BTU/software handoff.
+- `src/vm_native.c`: explicit built-in Java library methods.
+- `src/main.c`: EXWord class selector, text output, hardware self-tests.
+- `tools/pack_classes.py`: 8.3 filename alias conversion.
+- `tools/check_upstream_suite.sh`: the exact original ten-test gate.
+
+The current VM represents references as 32-bit handles, not physical heap
+addresses. For that reason it **does not** allow the hardware BTU to touch
+object/array slots. Those bytecodes are handled in C, while trusted arithmetic,
+primitive locals and branches can execute directly on the BTU. This is
+correctness-first; a future address-backed heap can extend BTU acceleration.
+
+Hardware warning: the app accesses privileged SH7305 BTU/CPG MMIO after
+the user explicitly starts execution. Only run on a compatible device.

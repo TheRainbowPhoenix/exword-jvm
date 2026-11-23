@@ -1,0 +1,5 @@
+Hello from EXWord JVM
+6 * 7 = 42
+sum = 4950
+squares = 328350
+args = 0
