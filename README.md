@@ -30,6 +30,28 @@ The hardware driver and J_JP instruction entry are ported from
 - **EXWord class execution itself is not yet device-validated.** The known
   8/8 success only established the earlier BTU hardware proof.
 
+## EXWord memory-limit fix
+
+This EXWord target has 18.5 KiB for application static data and its
+managed heap (plus a separate stack), compared with much larger host-machine
+heaps. The original launcher attempted to `calloc()` a ~58 KiB class index,
+then `malloc()` a 96 KiB buffer for **every** file. The hardware could not
+possibly satisfy those requests, so the launcher displayed "Not enough
+memory for class index".
+
+The index now stores only filenames with a shared directory and individually
+allocated JVM class names. The fixed index and VM tables are reserved in
+the linker's static RAM section, sized to fit its hard limit; class file
+reads allocate exactly their file size. The directory scanner no longer
+allocates an auxiliary constant-pool table. CI tests 30 successive directory
+scans and a real EXWord SH cross-build; the linker enforces the RAM limit.
+
+**Temporary constraints:** at most **64 class files** in the selected folder,
+**256 object handles** per VM invocation (and no GC yet). These limits cover
+the original uploaded collection of 35 Java classes plus the 2 smoke-test
+classes, but are not enough for the original full cpjvm-rs GC benchmark.
+Real device validation is still needed.
+
 ## Installing the Java VM
 
 Download a successful build artifact from
