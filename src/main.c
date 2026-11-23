@@ -108,9 +108,25 @@ static int select_main(jvm_loader_t *loader)
         while(key() != KEY_EXIT) {}
         return -1;
     }
+    /* The packer writes main.txt, but the GUI can still choose any entry. */
+    char preferred[JVM_CLASSNAME_MAX] = "Main";
+    char path[JVM_PATH_MAX];
+    snprintf(path, sizeof path, "%s\\main.txt", loader->directory);
+    uint8_t *config = NULL;
+    size_t n = 0;
+    if(jvm_read_file(path, &config, &n) == 0) {
+        size_t i = 0;
+        while(i < n && i < sizeof preferred - 1 &&
+              config[i] != '\n' && config[i] != '\r') {
+            char c = config[i] == '.' ? '/' : (char)config[i];
+            preferred[i++] = c;
+        }
+        preferred[i] = 0;
+        free(config);
+    }
     for(int i = 0; i < count; ++i)
-        if(!strcmp(loader->entries[runnable[i]].internal_name, "Main"))
-            index = i; /* favor upstream cpjvm-rs suite */
+        if(!strcmp(loader->entries[runnable[i]].internal_name, preferred))
+            index = i;
     for(;;) {
         dclear(C_WHITE);
         dtext(12, 8, C_BLACK, "Choose Java main class");
