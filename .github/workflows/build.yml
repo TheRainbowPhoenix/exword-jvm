@@ -32,6 +32,14 @@ jobs:
           diff -u tests/expected/BtuSmoke.txt /tmp/smoke.out
           /tmp/hostvm /tmp/class-alias BtuObjects > /tmp/objects.out
           diff -u tests/expected/BtuObjects.txt /tmp/objects.out
+          # Exercise the aliases without changing Java class-file bytes.
+          mkdir /tmp/alias-cla /tmp/alias-class
+          cp /tmp/class-alias/BTUSMOKE.cls /tmp/alias-cla/BTUSMOKE.cla
+          cp /tmp/classes/BtuObjects.class /tmp/alias-class/BtuObjects.class
+          /tmp/hostvm /tmp/alias-cla BtuSmoke > /tmp/cla.out
+          diff -u tests/expected/BtuSmoke.txt /tmp/cla.out
+          /tmp/hostvm /tmp/alias-class BtuObjects > /tmp/class.out
+          diff -u tests/expected/BtuObjects.txt /tmp/class.out
       - uses: actions/upload-artifact@v4
         with:
           name: smoke-java-classes
