@@ -20,8 +20,8 @@ The hardware driver and J_JP instruction entry are ported from
   String/StringBuilder, System.out/err printing, control flow, integer and
   long bytecodes are implemented. Hardware-safe bytecodes run through J_JP;
   opcodes involving virtual object handles fall back to the C interpreter.
-- **Automated acceptance:** a freshly compiled public Java 8 smoke program,
-  BtuSmoke.java, runs on the **host C VM** and matches Java stdout byte-for-byte.
+- **Automated acceptance:** two freshly compiled public Java 8 smoke programs,
+  BtuSmoke.java and BtuObjects.java, run on the **host C VM** and matches Java stdout byte-for-byte.
   The EXWord .d01 build and JA/CN packaging also succeed in CI.
 - **NOT YET supported fully:** the ten complete cpjvm-rs Java tests. The C
   library is not as complete as the original Rust implementation: exception
@@ -35,7 +35,7 @@ The hardware driver and J_JP instruction entry are ported from
 Download a successful build artifact from
 [GitHub Actions](https://github.com/TheRainbowPhoenix/exword-jvm/actions):
 **exword-jvm-ja** or **exword-jvm-cn**. It contains the BTPRF add-in folder,
-metadata, the D01, and a small Java smoke-test class.
+metadata, the D01, and two Java smoke-test classes.
 
 On the EXWord:
 
@@ -124,7 +124,7 @@ script uses your own checkout.
 ## Build
 
 The GitHub Actions workflow builds the EXWord fxSDK, gint-exword, and the C
-project, then packages the D01 and BtuSmoke class for JA/CN EXWord locales.
+project, then packages the D01 and both BtuSmoke/BtuObjects class files for JA/CN EXWord locales.
 
 Local build:
 
