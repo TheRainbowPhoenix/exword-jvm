@@ -6,10 +6,10 @@
 /* EXWord native paths can be long. Store filenames once (directory is shared)
  * and allocate each JVM internal name to its actual length.
  * No enormous class index malloc; no 96 KiB read buffer for 1 KiB classes.
- * At most 128 class files, 96 KiB each, 256-byte full paths.
+ * At most 64 class files, 96 KiB each, 256-byte full paths.
  */
-#define JVM_FILES_MAX 128
-#define JVM_FILENAME_MAX 48
+#define JVM_FILES_MAX 64
+#define JVM_FILENAME_MAX 24
 #define JVM_PATH_MAX 256
 #define JVM_CLASSNAME_MAX 192
 #define JVM_CLASSFILE_MAX (96 * 1024)
