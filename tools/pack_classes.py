@@ -109,7 +109,14 @@ def main():
         else:
             alias = hashlib.sha256(name.encode()).hexdigest()[:8].upper()
         if alias in occupied and occupied[alias] != name:
-            raise SystemExit(f"alias collision: {name}, {occupied[alias]}")
+            # Two packages can both contain a short "Helper" class.
+            # Do not discard either; use a deterministic 8-character hash.
+            for salt in range(100):
+                alias = hashlib.sha256((name + f"#{salt}").encode()).hexdigest()[:8].upper()
+                if alias not in occupied or occupied[alias] == name:
+                    break
+            else:
+                raise SystemExit(f"cannot allocate unique 8.3 alias for {name}")
         occupied[alias] = name
         dest = args.output / f"{alias}.cls"
         dest.write_bytes(payload)
