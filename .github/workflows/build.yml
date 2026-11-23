@@ -1,4 +1,4 @@
-name: Build (EX-word EXIT test)
+name: Build (EX-word SH7305 BTU proof)
 
 on:
   push:
@@ -9,6 +9,16 @@ permissions:
   contents: read
 
 jobs:
+  host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Compile and check portable probe fixtures
+        run: |
+          cc -std=c11 -O2 -Wall -Wextra -Werror -Isrc \
+            tests/host_probes.c src/probes.c -o /tmp/host-probes
+          /tmp/host-probes
+
   build:
     runs-on: ubuntu-latest
     container:
@@ -45,7 +55,7 @@ jobs:
           cmake --build /tmp/gint-build --parallel 2
           cmake --install /tmp/gint-build
 
-      - name: Build EXIT test and installation packages
+      - name: Build BTU proof and installation packages
         shell: bash
         run: |
           set -euo pipefail
@@ -57,11 +67,11 @@ jobs:
             '-DCMAKE_MODULE_PATH=/tmp/gint-exword/lib/cmake/fxsdk;/tmp/fxsdk-exword/lib/cmake/fxsdk' \
             -DEXWORD_METADATA_SOURCE=/tmp/exword-metadata
           cmake --build build-exword --parallel 2
-          test -s build-exword/ginttest.d01
-          test "$(stat -c %s build-exword/ginttest.d01)" -le 131072
+          test -s build-exword/btuproof.d01
+          test "$(stat -c %s build-exword/btuproof.d01)" -le 131072
           for locale in ja cn; do
-            package="build-exword/packages/$locale/GINTT"
-            test -s "$package/ginttest.d01"
+            package="build-exword/packages/$locale/BTPRF"
+            test -s "$package/btuproof.d01"
             test -s "$package/diction.htm"
             test -f "$package/fileinfo.cji"
           done
@@ -69,14 +79,14 @@ jobs:
       - name: Upload Japanese install folder
         uses: actions/upload-artifact@v4
         with:
-          name: gint-exword-template-ja
+          name: exword-btu-proof-ja
           path: build-exword/packages/ja/
           if-no-files-found: error
 
       - name: Upload Chinese install folder
         uses: actions/upload-artifact@v4
         with:
-          name: gint-exword-template-cn
+          name: exword-btu-proof-cn
           path: build-exword/packages/cn/
           if-no-files-found: error
 
@@ -84,8 +94,8 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: gint-exword-template-debug
+          name: exword-btu-proof-debug
           path: |
-            build-exword/ginttest
-            build-exword/ginttest.map
+            build-exword/btuproof
+            build-exword/btuproof.map
           if-no-files-found: warn
