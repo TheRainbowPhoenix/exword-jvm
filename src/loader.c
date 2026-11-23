@@ -216,7 +216,7 @@ int jvm_read_file(const char *path, uint8_t **out, size_t *size)
     int rc = host_read(path, bytes, size);
 #else
     read_op_t op = {path, bytes, JVM_CLASSFILE_MAX, 0};
-    int rc = gint_world_switch(GINT_CALL(native_read, &op));
+    int rc = gint_world_switch(GINT_CALL(native_read, (void *)&op));
     if(rc >= 0) *size = op.size;
 #endif
     if(rc < 0) { free(bytes); return rc; }
@@ -292,7 +292,7 @@ int jvm_loader_scan(jvm_loader_t *loader, const char *directory)
     int rc = host_scan(loader, directory);
 #else
     scan_op_t op = {loader, directory};
-    int rc = gint_world_switch(GINT_CALL(native_scan, &op));
+    int rc = gint_world_switch(GINT_CALL(native_scan, (void *)&op));
 #endif
     if(rc < 0) {
         snprintf(loader->status, sizeof loader->status,
