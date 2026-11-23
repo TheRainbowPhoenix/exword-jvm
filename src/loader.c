@@ -30,31 +30,53 @@ static void skip(reader_t *r, size_t n)
     if(n > r->size - r->at) { r->error = 1; r->at = r->size; }
     else r->at += n;
 }
-typedef struct {
-    const uint8_t *utf;
-    uint16_t len, target;
-    unsigned char tag;
-} mini_cp_t;
-static int utf_equal(mini_cp_t *cp, unsigned count, unsigned idx, const char *s)
+/* Constant-pool lookup without a second allocation.
+ * For scanning the directory we only need this_class and main's descriptor.
+ * Replaying the small CP is cheaper than allocating a table for every file. */
+static int cp_lookup(reader_t *r, unsigned cp_count, unsigned requested,
+                     unsigned *class_utf, const uint8_t **utf,
+                     unsigned *utf_len)
 {
-    if(!idx || idx >= count || cp[idx].tag != 1) return 0;
-    size_t n = strlen(s);
-    return n == cp[idx].len && !memcmp(cp[idx].utf, s, n);
-}
-static int class_name(mini_cp_t *cp, unsigned count, unsigned idx,
-                      char name[JVM_CLASSNAME_MAX])
-{
-    if(!idx || idx >= count || cp[idx].tag != 7) return -1;
-    idx = cp[idx].target;
-    if(!idx || idx >= count || cp[idx].tag != 1 ||
-       !cp[idx].len || cp[idx].len >= JVM_CLASSNAME_MAX) return -1;
-    for(unsigned i = 0; i < cp[idx].len; i++) {
-        unsigned char c = cp[idx].utf[i];
-        if(c < 0x21 || c > 0x7e || c == '\\') return -1;
+    for(unsigned i = 1; i < cp_count && !r->error; ++i) {
+        unsigned tag = u1(r);
+        switch(tag) {
+        case 1: {
+            unsigned n = u2(r);
+            if(n > r->size - r->at) { r->error = 1; break; }
+            if(i == requested) {
+                if(utf) *utf = r->data + r->at;
+                if(utf_len) *utf_len = n;
+            }
+            skip(r, n);
+            break;
+        }
+        case 3: case 4: skip(r, 4); break;
+        case 5: case 6: skip(r, 8); ++i; break;
+        case 7: {
+            unsigned x = u2(r);
+            if(i == requested && class_utf) *class_utf = x;
+            break;
+        }
+        case 8: case 16: case 19: case 20: skip(r, 2); break;
+        case 9: case 10: case 11: case 12: case 17: case 18:
+            skip(r, 4); break;
+        case 15: skip(r, 3); break;
+        default: r->error = 1; break;
+        }
     }
-    memcpy(name, cp[idx].utf, cp[idx].len);
-    name[cp[idx].len] = '\0';
-    return 0;
+    return r->error ? -1 : 0;
+}
+static int cp_utf_equal(const uint8_t *data, size_t len, size_t cp_start,
+                        unsigned cp_count, unsigned idx, const char *s)
+{
+    reader_t r = {data, len, cp_start, 0};
+    const uint8_t *ptr = NULL;
+    unsigned n = 0;
+    if(!idx || idx >= cp_count ||
+       cp_lookup(&r, cp_count, idx, NULL, &ptr, &n))
+        return 0;
+    size_t expected = strlen(s);
+    return ptr && n == expected && !memcmp(ptr, s, expected);
 }
 static void skip_attributes(reader_t *r)
 {
@@ -73,66 +95,63 @@ int jvm_peek_class(const uint8_t *data, size_t length,
     name[0] = 0;
     if(u4(&r) != 0xcafebabe || r.error) return -1;
     (void)u2(&r); (void)u2(&r); /* minor, major */
-    unsigned cp_count = u2(&r);
-    if(cp_count < 1 || cp_count > 8192 || r.error) return -2;
-    mini_cp_t *cp = calloc(cp_count, sizeof *cp);
-    if(!cp) return -3;
-    int rc = -4;
-    for(unsigned i = 1; i < cp_count && !r.error; i++) {
-        unsigned tag = u1(&r);
-        cp[i].tag = tag;
-        switch(tag) {
-        case 1: {
-            unsigned len = u2(&r);
-            if(len > r.size - r.at) { r.error = 1; break; }
-            cp[i].len = len;
-            cp[i].utf = r.data + r.at;
-            skip(&r, len);
-            break;
-        }
-        case 3: case 4: skip(&r, 4); break;
-        case 5: case 6: skip(&r, 8); ++i; break;
-        case 7: case 8: case 16: case 19: case 20:
-            cp[i].target = u2(&r); break;
-        case 9: case 10: case 11: case 12: case 17: case 18:
-            skip(&r, 4); break;
-        case 15: skip(&r, 3); break;
-        default: r.error = 1; break;
-        }
-    }
-    if(r.error) goto out;
+    unsigned count = u2(&r);
+    if(count < 1 || count > 8192 || r.error) return -2;
+    size_t cp_start = r.at;
+
+    /* First pass reaches the class header after the constant pool. */
+    if(cp_lookup(&r, count, 0, NULL, NULL, NULL)) return -4;
     (void)u2(&r); /* access */
     unsigned this_class = u2(&r);
     (void)u2(&r); /* super */
-    if(class_name(cp, cp_count, this_class, name) < 0) goto out;
+    if(!this_class || this_class >= count || r.error) return -4;
+
+    /* this_class -> CONSTANT_Class.name_index -> CONSTANT_Utf8 bytes */
+    reader_t search = {data, length, cp_start, 0};
+    unsigned name_idx = 0;
+    if(cp_lookup(&search, count, this_class, &name_idx, NULL, NULL) ||
+       !name_idx || name_idx >= count) return -4;
+    search = (reader_t){data, length, cp_start, 0};
+    const uint8_t *utf = NULL;
+    unsigned name_len = 0;
+    if(cp_lookup(&search, count, name_idx, NULL, &utf, &name_len) ||
+       !utf || !name_len || name_len >= JVM_CLASSNAME_MAX) return -4;
+    for(unsigned i = 0; i < name_len; ++i) {
+        unsigned char ch = utf[i];
+        if(ch < 0x21 || ch > 0x7e || ch == '\\') return -4;
+    }
+    memcpy(name, utf, name_len);
+    name[name_len] = 0;
+
     unsigned interfaces = u2(&r);
-    if(interfaces > 1024) goto out;
+    if(interfaces > 1024) goto bad;
     skip(&r, (size_t)interfaces * 2);
     unsigned fields = u2(&r);
-    if(fields > 8192) goto out;
+    if(fields > 8192) goto bad;
     for(unsigned i = 0; i < fields && !r.error; ++i) {
         skip(&r, 6);
         skip_attributes(&r);
     }
     unsigned methods = u2(&r);
-    if(methods > 8192) goto out;
+    if(methods > 8192) goto bad;
     for(unsigned i = 0; i < methods && !r.error; ++i) {
         unsigned access = u2(&r);
         unsigned method_name = u2(&r);
         unsigned descriptor = u2(&r);
         if(main_method && (access & 0x0008) &&
-           utf_equal(cp, cp_count, method_name, "main") &&
-           utf_equal(cp, cp_count, descriptor, "([Ljava/lang/String;)V"))
+           cp_utf_equal(data, length, cp_start, count, method_name, "main") &&
+           cp_utf_equal(data, length, cp_start, count, descriptor,
+                        "([Ljava/lang/String;)V"))
             *main_method = 1;
         skip_attributes(&r);
     }
-    if(r.error) goto out;
+    if(r.error) goto bad;
     skip_attributes(&r);
-    if(!r.error && r.at == r.size) rc = 0;
-out:
-    free(cp);
-    if(rc) name[0] = 0;
-    return rc;
+    if(!r.error && r.at == r.size) return 0;
+bad:
+    name[0] = 0;
+    if(main_method) *main_method = 0;
+    return -4;
 }
 
 static int suffix_is_class(const char *s)
