@@ -369,7 +369,14 @@ int jvm_loader_scan(jvm_loader_t *loader, const char *directory)
         if(join(path, directory, entry->filename)) continue;
         uint8_t *data = NULL;
         size_t length = 0;
-        if(jvm_read_file(path, &data, &length) < 0) continue;
+        int read_rc = jvm_read_file(path, &data, &length);
+        if(read_rc == -200) {
+            loader->count = valid;
+            snprintf(loader->status, sizeof loader->status,
+                     "Not enough RAM to read %.60s", entry->filename);
+            return -200;
+        }
+        if(read_rc < 0) continue;
         char actual_name[JVM_CLASSNAME_MAX];
         int is_main = 0;
         int ok = jvm_peek_class(data, length, actual_name, &is_main);
@@ -413,7 +420,7 @@ int jvm_loader_autodetect(jvm_loader_t *loader)
     };
     for(unsigned i = 0; i < sizeof roots / sizeof roots[0]; ++i) {
         int n = jvm_loader_scan(loader, roots[i]);
-        if(n > 0) return n;
+        if(n > 0 || n == -200) return n;
     }
     snprintf(loader->status, sizeof loader->status,
              "No classes found in BTPRF/Java/drive root");
