@@ -13,6 +13,10 @@
 #define SCREEN_COLUMNS 69
 
 static btu_t hardware;
+/* These fixed-size tables are used sequentially. Reserve them in .bss so
+ * scanning Java files never requires a huge contiguous heap block. */
+static jvm_loader_t class_index;
+static jvm_vm_t java_vm;
 static char lines[SCREEN_ROWS][SCREEN_COLUMNS + 1];
 static unsigned line_no, col_no;
 
@@ -158,13 +162,7 @@ static void run_class(jvm_loader_t *loader, const char *class_name)
     } else {
         log_text("[BTU enabled: real J_JP bytecode execution]");
     }
-    jvm_vm_t *vm = calloc(1, sizeof *vm);
-    if(!vm) {
-        if(hardware.active) btu_stop(&hardware);
-        log_text("Cannot allocate Java VM");
-        while(key() != KEY_EXIT) {}
-        return;
-    }
+    jvm_vm_t *vm = &java_vm;
     jvm_vm_init(vm, loader, hardware.active ? &hardware : NULL, output, NULL);
     int rc = jvm_vm_run(vm, class_name);
     if(hardware.active) btu_stop(&hardware);
@@ -180,7 +178,6 @@ static void run_class(jvm_loader_t *loader, const char *class_name)
              (unsigned)vm->stats.allocations);
     log_text(msg);
     jvm_vm_destroy(vm);
-    free(vm);
     log_text("[press EXIT to return]");
     draw_log();
     while(key() != KEY_EXIT) {}
@@ -201,12 +198,7 @@ int main(void)
         if(k != KEY_EXE) continue;
 
         title("Searching EXWord filesystem...");
-        jvm_loader_t *loader = calloc(1, sizeof *loader);
-        if(!loader) {
-            title("Not enough memory for class index");
-            while(key() != KEY_EXIT) {}
-            continue;
-        }
+        jvm_loader_t *loader = &class_index;
         int count = jvm_loader_autodetect(loader);
         if(count <= 0) {
             title("No Java class files found");
@@ -223,6 +215,6 @@ int main(void)
                 run_class(loader, name);
             }
         }
-        free(loader);
+        jvm_loader_destroy(loader);
     }
 }
