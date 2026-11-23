@@ -23,13 +23,15 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/classes
-          javac --release 8 -d /tmp/classes tests/java/BtuSmoke.java
+          javac --release 8 -d /tmp/classes tests/java/BtuSmoke.java tests/java/BtuObjects.java
           python3 tools/pack_classes.py /tmp/class-alias /tmp/classes --main BtuSmoke
           cc -std=c11 -O2 -Wall -Wextra -Werror -DJVM_HOST -Isrc \
             tests/host_vm.c src/loader.c src/classfile.c src/vm.c \
             src/vm_exec.c src/vm_native.c -lm -o /tmp/hostvm
           /tmp/hostvm /tmp/class-alias BtuSmoke > /tmp/smoke.out
           diff -u tests/expected/BtuSmoke.txt /tmp/smoke.out
+          /tmp/hostvm /tmp/class-alias BtuObjects > /tmp/objects.out
+          diff -u tests/expected/BtuObjects.txt /tmp/objects.out
       - uses: actions/upload-artifact@v4
         with:
           name: smoke-java-classes
