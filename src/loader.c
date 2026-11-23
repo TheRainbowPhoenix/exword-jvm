@@ -164,6 +164,25 @@ static int join(char path[JVM_PATH_MAX], const char *dir, const char *file)
 #ifndef JVM_HOST
 typedef struct {
     const char *path;
+    size_t size;
+} size_op_t;
+
+/* Two short world switches: ask the native FS for the actual length first,
+ * then allocate only as many bytes as this file needs. Previous code asked
+ * malloc() for 96 KiB per read, even for a 5-byte main.txt. */
+static int native_size(size_op_t *op)
+{
+    int fd = exword_sys_open(op->path, 1);
+    if(fd < 0) return fd;
+    int len = exword_sys_get_filesize(fd);
+    int close_rc = exword_sys_close(fd);
+    if(len < 0) return len;
+    if(close_rc < 0) return close_rc;
+    op->size = (size_t)len;
+    return 0;
+}
+typedef struct {
+    const char *path;
     uint8_t *out;
     size_t max, size;
 } read_op_t;
@@ -188,11 +207,11 @@ static int native_read(read_op_t *op)
         at += n;
     }
     int rc = exword_sys_close(fd);
-    op->size = len;
+    op->size = (size_t)len;
     return rc < 0 ? rc : 0;
 }
 #else
-static int host_read(const char *path, uint8_t *out, size_t *size)
+static int host_read_alloc(const char *path, uint8_t **out, size_t *size)
 {
     FILE *f = fopen(path, "rb");
     if(!f) return -1;
@@ -200,38 +219,56 @@ static int host_read(const char *path, uint8_t *out, size_t *size)
     long len = ftell(f);
     if(len < 0 || len > JVM_CLASSFILE_MAX) { fclose(f); return -3; }
     rewind(f);
-    size_t n = fread(out, 1, (size_t)len, f);
-    fclose(f);
-    if(n != (size_t)len) return -4;
-    *size = n;
+    uint8_t *data = malloc(len ? (size_t)len : 1);
+    if(!data) { fclose(f); return -200; }
+    size_t count = fread(data, 1, (size_t)len, f);
+    int close_rc = fclose(f);
+    if(count != (size_t)len || close_rc) { free(data); return -4; }
+    *out = data;
+    *size = count;
     return 0;
 }
 #endif
 int jvm_read_file(const char *path, uint8_t **out, size_t *size)
 {
-    *out = NULL; *size = 0;
-    uint8_t *bytes = malloc(JVM_CLASSFILE_MAX);
-    if(!bytes) return -200;
+    if(!out || !size || !path) return -2;
+    *out = NULL;
+    *size = 0;
 #ifdef JVM_HOST
-    int rc = host_read(path, bytes, size);
+    return host_read_alloc(path, out, size);
 #else
-    read_op_t op = {path, bytes, JVM_CLASSFILE_MAX, 0};
-    int rc = gint_world_switch(GINT_CALL(native_read, (void *)&op));
-    if(rc >= 0) *size = op.size;
-#endif
-    if(rc < 0) { free(bytes); return rc; }
-    *out = bytes;
-    return 0;
-}
+    size_op_t query = {path, 0};
+    int rc = gint_world_switch(GINT_CALL(native_size, (void *)&query));
+    if(rc < 0) return rc;
+    if(query.size > JVM_CLASSFILE_MAX) return -100;
 
+    uint8_t *data = malloc(query.size ? query.size : 1);
+    if(!data) return -200;
+    read_op_t op = {path, data, query.size, 0};
+    rc = gint_world_switch(GINT_CALL(native_read, (void *)&op));
+    if(rc < 0) { free(data); return rc; }
+    *out = data;
+    *size = op.size;
+    return 0;
+#endif
+}
 void jvm_loader_init(jvm_loader_t *loader)
 {
+    memset(loader, 0, sizeof *loader);
+}
+void jvm_loader_destroy(jvm_loader_t *loader)
+{
+    unsigned count = loader->count;
+    if(count > JVM_FILES_MAX) count = JVM_FILES_MAX;
+    for(unsigned i = 0; i < count; ++i)
+        free(loader->entries[i].internal_name);
     memset(loader, 0, sizeof *loader);
 }
 int jvm_loader_find(jvm_loader_t *loader, const char *internal_name)
 {
     for(unsigned i = 0; i < loader->count; ++i)
-        if(!strcmp(loader->entries[i].internal_name, internal_name))
+        if(loader->entries[i].internal_name &&
+           !strcmp(loader->entries[i].internal_name, internal_name))
             return (int)i;
     return -1;
 }
@@ -256,8 +293,10 @@ static int native_scan(scan_op_t *op)
         if(type != 5 && suffix_is_class(name) &&
            op->loader->count < JVM_FILES_MAX) {
             jvm_file_t *e = &op->loader->entries[op->loader->count];
-            if(join(e->path, op->directory, name) == 0)
+            if(strlen(name) < sizeof e->filename) {
+                strcpy(e->filename, name);
                 ++op->loader->count;
+            }
         }
         name[0] = 0; type = 0;
         rc = exword_sys_findnext(handle, name, &type);
@@ -277,7 +316,10 @@ static int host_scan(jvm_loader_t *loader, const char *dir)
         if(loader->count >= JVM_FILES_MAX) break;
         if(!suffix_is_class(e->d_name)) continue;
         jvm_file_t *file = &loader->entries[loader->count];
-        if(join(file->path, dir, e->d_name) == 0) ++loader->count;
+        if(strlen(e->d_name) < sizeof file->filename) {
+            strcpy(file->filename, e->d_name);
+            ++loader->count;
+        }
     }
     closedir(d);
     return 0;
@@ -285,7 +327,9 @@ static int host_scan(jvm_loader_t *loader, const char *dir)
 #endif
 int jvm_loader_scan(jvm_loader_t *loader, const char *directory)
 {
-    jvm_loader_init(loader);
+    /* Release the previous directory's short allocated names. The caller
+     * provides zero-initialized loader storage on its first call. */
+    jvm_loader_destroy(loader);
     if(strlen(directory) >= JVM_PATH_MAX) return -1;
     strcpy(loader->directory, directory);
 #ifdef JVM_HOST
@@ -296,20 +340,39 @@ int jvm_loader_scan(jvm_loader_t *loader, const char *directory)
 #endif
     if(rc < 0) {
         snprintf(loader->status, sizeof loader->status,
-                 "Scan %s: error %d", directory, rc);
+                 "Scan %.65s: error %d", directory, rc);
         return rc;
     }
     unsigned valid = 0;
     for(unsigned i = 0; i < loader->count; ++i) {
         jvm_file_t *entry = &loader->entries[i];
-        uint8_t *data;
-        size_t length;
-        if(jvm_read_file(entry->path, &data, &length)) continue;
+        char path[JVM_PATH_MAX];
+        if(join(path, directory, entry->filename)) continue;
+        uint8_t *data = NULL;
+        size_t length = 0;
+        if(jvm_read_file(path, &data, &length) < 0) continue;
+        char actual_name[JVM_CLASSNAME_MAX];
         int is_main = 0;
-        int ok = jvm_peek_class(data, length, entry->internal_name, &is_main);
+        int ok = jvm_peek_class(data, length, actual_name, &is_main);
         free(data);
-        if(ok != 0 || jvm_loader_find(loader, entry->internal_name) != (int)i)
-            continue;
+        if(ok) continue;
+        int duplicate = 0;
+        for(unsigned j = 0; j < valid; ++j) {
+            if(!strcmp(loader->entries[j].internal_name, actual_name)) {
+                duplicate = 1; break;
+            }
+        }
+        if(duplicate) continue;
+        size_t name_len = strlen(actual_name);
+        char *copy = malloc(name_len + 1);
+        if(!copy) {
+            loader->count = valid;
+            snprintf(loader->status, sizeof loader->status,
+                     "Out of RAM indexing JVM class name");
+            return -200;
+        }
+        memcpy(copy, actual_name, name_len + 1);
+        entry->internal_name = copy;
         entry->bytes = length;
         entry->has_main = is_main;
         if(valid != i) loader->entries[valid] = *entry;
@@ -343,5 +406,8 @@ int jvm_loader_fetch(jvm_loader_t *loader, const char *internal_name,
 {
     int index = jvm_loader_find(loader, internal_name);
     if(index < 0) return -1;
-    return jvm_read_file(loader->entries[index].path, bytes, length);
+    char path[JVM_PATH_MAX];
+    if(join(path, loader->directory, loader->entries[index].filename))
+        return -3;
+    return jvm_read_file(path, bytes, length);
 }
