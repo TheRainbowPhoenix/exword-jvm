@@ -5,7 +5,7 @@
 #include "btu.h"
 
 #define JVM_MAX_CLASSES 96
-#define JVM_MAX_OBJECTS 4096
+#define JVM_MAX_OBJECTS 256
 #define JVM_MAX_RECURSION 128
 #define JVM_STEP_LIMIT 30000000u
 
