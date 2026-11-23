@@ -22,7 +22,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone -q --depth=1 https://github.com/TheRainbowPhoenix/cpjvm-rs.git /tmp/cpjvm-rs
+          git -c http.https://github.com/.extraheader= clone -q --depth=1 https://github.com/TheRainbowPhoenix/cpjvm-rs.git /tmp/cpjvm-rs
           python3 tools/pack_classes.py /tmp/class-alias /tmp/cpjvm-rs/tests/classes
           cc -std=c11 -O2 -Wall -Wextra -Werror -DJVM_HOST -Isrc \
             tests/host_vm.c src/loader.c src/classfile.c src/vm.c \
@@ -78,7 +78,7 @@ jobs:
             '-DCMAKE_MODULE_PATH=/tmp/gint-exword/lib/cmake/fxsdk;/tmp/fxsdk-exword/lib/cmake/fxsdk' \
             -DEXWORD_METADATA_SOURCE=/tmp/exword-metadata
           cmake --build build-exword --parallel 2
-          git clone -q --depth=1 \
+          git -c http.https://github.com/.extraheader= clone -q --depth=1 \
             https://github.com/TheRainbowPhoenix/cpjvm-rs.git /tmp/cpjvm-rs
           for locale in ja cn; do
             python3 tools/pack_classes.py \
